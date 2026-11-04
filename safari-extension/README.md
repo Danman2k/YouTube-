@@ -7,7 +7,7 @@ Removes YouTube Shorts from Safari on Mac, iPhone and iPad:
 - The **Shorts** button in the sidebar (desktop) and bottom bar (mobile), and the **Shorts** tab on channel pages
 - Any Shorts link you open goes to the **normal video player**, not the swipe feed. To turn this off, set `REDIRECT_SHORTS_TO_WATCH = false` at the top of `hide-shorts.user.js`.
 
-It works on `www.youtube.com` and `m.youtube.com`. The YouTube *app* can't run extensions.
+It works on `www.youtube.com` and `m.youtube.com` in Safari. It can't run in the YouTube app or in Home Screen web apps. To get a Home Screen icon that still hides Shorts, see [Opening YouTube from your Home Screen](../README.md#opening-youtube-from-your-home-screen).
 
 There are two ways to install it. Both use the same file, `hide-shorts.user.js`.
 
