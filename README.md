@@ -1,5 +1,7 @@
 # YouTube Background Play + Ad Block (iPhone)
 
+> **Also here:** [`safari-extension/`](safari-extension/) is a Safari extension (also usable as a userscript) that hides YouTube Shorts from your feed.
+
 A Safari userscript that gives YouTube on iPhone two Premium-style features:
 
 - **Background play**: audio keeps going when you lock the screen or switch apps.
