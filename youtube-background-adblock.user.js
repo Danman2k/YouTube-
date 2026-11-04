@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Background Play + Ad Block
 // @namespace    https://github.com/danman2k/youtube-
-// @version      1.0.0
+// @version      1.1.0
 // @description  Keeps YouTube playing with the screen off / Safari in the background, and blocks or skips ads. Built for Safari on iPhone via the "Userscripts" app.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -17,6 +17,11 @@
 
   if (window.__ytbgab) return;
   window.__ytbgab = true;
+
+  // How long (minutes) Safari keeps hold of the lock-screen / headphone play
+  // button after you pause, so pressing play resumes YouTube instead of
+  // Apple Music. Set to 0 to turn this off.
+  const HOLD_PLAY_BUTTON_MINUTES = 30;
 
   const LOG = (...a) => { try { console.debug('[yt-bg-ab]', ...a); } catch (_) {} };
 
@@ -62,6 +67,7 @@
     const pageHandlers = {};
     const wrap = (action) => (details) => {
       markIntent();
+      if (hold && (action === 'play' || action === 'pause')) return resumeFromHold();
       if (pageHandlers[action]) return pageHandlers[action](details);
       const v = getVideo();
       if (!v) return;
@@ -78,6 +84,64 @@
     for (const a of ['play', 'pause']) { try { origSet(a, wrap(a)); } catch (_) {} }
   }
 
+  // KEEP THE PLAY BUTTON: once nothing is playing, iOS gives the
+  // lock-screen / headphone play button back to Apple Music. While you're
+  // paused we loop a silent sound so Safari stays the "Now Playing" app.
+  let hold = null;
+  let holdAudio = null;
+
+  function silentWavUrl() {
+    const rate = 8000, n = rate; // 1 second, 8-bit mono, silent
+    const buf = new Uint8Array(44 + n);
+    const dv = new DataView(buf.buffer);
+    const str = (o, t) => { for (let i = 0; i < t.length; i++) buf[o + i] = t.charCodeAt(i); };
+    str(0, 'RIFF'); dv.setUint32(4, 36 + n, true); str(8, 'WAVE');
+    str(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+    dv.setUint32(24, rate, true); dv.setUint32(28, rate, true); dv.setUint16(32, 1, true); dv.setUint16(34, 8, true);
+    str(36, 'data'); dv.setUint32(40, n, true);
+    buf.fill(128, 44);
+    return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  }
+
+  function getHoldAudio() {
+    if (!holdAudio) {
+      holdAudio = new Audio(silentWavUrl());
+      holdAudio.loop = true;
+      holdAudio.setAttribute('playsinline', '');
+      // Paused by someone else (e.g. you started Apple Music): let go.
+      holdAudio.addEventListener('pause', () => { if (hold) endHold(); });
+    }
+    return holdAudio;
+  }
+
+  function startHold(video) {
+    if (HOLD_PLAY_BUTTON_MINUTES <= 0 || hold) return;
+    const meta = ms ? ms.metadata : null;
+    hold = { video, meta, timer: setTimeout(endHold, HOLD_PLAY_BUTTON_MINUTES * 60000) };
+    const a = getHoldAudio();
+    try { a.currentTime = 0; } catch (_) {}
+    a.play().then(() => {
+      if (!hold || !ms) return;
+      try { if (hold.meta) ms.metadata = hold.meta; } catch (_) {}
+      try { ms.playbackState = 'paused'; } catch (_) {}
+      LOG('holding play button');
+    }).catch(() => { hold = null; });
+  }
+
+  function endHold() {
+    if (!hold) return;
+    clearTimeout(hold.timer);
+    hold = null;
+    if (holdAudio && !holdAudio.paused) holdAudio.pause();
+  }
+
+  function resumeFromHold() {
+    const v = (hold && hold.video && hold.video.isConnected) ? hold.video : getVideo();
+    if (v) v.play().catch(() => {});
+    endHold();
+    try { if (ms) ms.playbackState = 'playing'; } catch (_) {}
+  }
+
   // If the video gets paused while the screen is off and nobody asked for
   // it, start it again.
   const hooked = new WeakSet();
@@ -87,13 +151,17 @@
     v.removeAttribute('disablepictureinpicture');
     try { v.disablePictureInPicture = false; } catch (_) {}
     let wasPlayingAt = 0;
-    v.addEventListener('playing', () => { wasPlayingAt = Date.now(); });
+    v.addEventListener('playing', () => { wasPlayingAt = Date.now(); endHold(); });
+    v.addEventListener('play', endHold);
     v.addEventListener('timeupdate', () => { if (!v.paused) wasPlayingAt = Date.now(); });
     v.addEventListener('pause', () => {
       const now = Date.now();
       if (v.ended) return;
-      if (now - lastIntentAt < 1500) return;          // user paused
       if (now - wasPlayingAt > 4000) return;          // wasn't really playing
+      if (now - lastIntentAt < 1500) {                 // user paused
+        if (!isAdShowing()) startHold(v);
+        return;
+      }
       if (!realHidden()) return;                      // only fight background pauses
       LOG('background pause detected, resuming');
       let tries = 0;

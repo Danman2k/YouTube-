@@ -26,6 +26,7 @@ It runs in **Safari** through the free, open-source **Userscripts** app. You don
 - **Use Safari itself.** The YouTube app, and YouTube saved to your Home Screen, can't run extensions.
 - **If audio stops when you lock the phone,** press **Play** on the lock screen or in Control Center. It will keep going from then on. iOS sometimes pauses media at the moment the screen locks; the script tries to resume it automatically, but iOS doesn't always allow that.
 - Lock-screen and Control Center play/pause buttons work as normal. The script only restarts pauses you didn't ask for.
+- **The play button stays with YouTube after you pause.** For 30 minutes after a pause, the script loops a silent sound so iOS keeps Safari as the "Now Playing" app. Pressing play on the lock screen, in Control Center or on your headphones resumes YouTube instead of starting Apple Music. If you open another music app, the script lets go immediately. To change the time, edit `HOLD_PLAY_BUTTON_MINUTES` at the top of the script (`0` turns this off).
 - **Picture-in-Picture:** start a video in fullscreen, then swipe home.
 
 ## Limitations
