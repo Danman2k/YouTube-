@@ -43,7 +43,7 @@ The only difference from a web app is that Safari's address bar stays visible.
 ## Tips
 
 - **Use Safari itself.** The YouTube app and Home Screen *web apps* can't run extensions. See [Opening YouTube from your Home Screen](#opening-youtube-from-your-home-screen) for an icon that works.
-- **If audio stops when you lock the phone,** press **Play** on the lock screen or in Control Center. It will keep going from then on. iOS sometimes pauses media at the moment the screen locks; the script tries to resume it automatically, but iOS doesn't always allow that.
+- **If audio stops when you lock the phone or go to the Home Screen,** press **Play** on the lock screen or in Control Center. It will keep going from then on. iOS sometimes pauses media at the moment Safari goes to the background. The script resumes it automatically, but iOS doesn't always allow that.
 - Lock-screen and Control Center play/pause buttons work as normal. The script only restarts pauses you didn't ask for.
 - **The play button stays with YouTube after you pause.** For 30 minutes after a pause, the script loops a silent sound so iOS keeps Safari as the "Now Playing" app. Pressing play on the lock screen, in Control Center or on your headphones resumes YouTube instead of starting Apple Music. If you open another music app, the script lets go immediately. To change the time, edit `HOLD_PLAY_BUTTON_MINUTES` at the top of the script (`0` turns this off).
 - **Picture-in-Picture:** start a video in fullscreen, then swipe home.
@@ -57,7 +57,7 @@ The only difference from a web app is that Safari's address bar stays visible.
 
 | Feature | Technique |
 | --- | --- |
-| Background play | Fakes `document.hidden` / `visibilityState` and blocks `visibilitychange`, so YouTube never sees that the page went to the background. Pauses you didn't ask for (no tap and no lock-screen button) are resumed. |
+| Background play | Fakes `document.hidden` / `visibilityState` and blocks `visibilitychange`, so YouTube never sees that the page went to the background. Pauses you didn't ask for (no finished tap and no lock-screen button) are resumed, including ones iOS makes just before the page reports that it went to the background. |
 | Ad removal | Hooks `JSON.parse`, `Response.json` and `ytInitialPlayerResponse`, and deletes `adPlacements`, `adSlots` and `playerAds` from the player data. |
 | Ad skipping | Every 300 ms: when the player shows `ad-showing`, the script mutes the ad, sets 16× speed, seeks to the end and clicks "Skip". |
 | Page ads | CSS hides ad and promo elements on m.youtube.com, www.youtube.com and music.youtube.com. |
