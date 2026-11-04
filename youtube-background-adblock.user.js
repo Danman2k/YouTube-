@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Background Play + Ad Block
 // @namespace    https://github.com/danman2k/youtube-
-// @version      1.1.0
+// @version      1.2.0
 // @description  Keeps YouTube playing with the screen off / Safari in the background, and blocks or skips ads. Built for Safari on iPhone via the "Userscripts" app.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -45,8 +45,17 @@
   spoof('webkitVisibilityState', 'visible');
   try { document.hasFocus = () => true; } catch (_) {}
 
+  // When the page really goes to the background (Home Screen, app
+  // switcher, lock). We still see these events even though YouTube doesn't.
+  let lastBackgroundAt = 0;
+  let onBackground = () => {};
   const blockEvent = (e) => {
-    if (e.target === window || e.target === document) e.stopImmediatePropagation();
+    if (e.target !== window && e.target !== document) return;
+    e.stopImmediatePropagation();
+    if (e.type === 'pagehide' || e.type === 'freeze' || e.type === 'blur' || realHidden()) {
+      lastBackgroundAt = Date.now();
+      onBackground();
+    }
   };
   for (const type of ['visibilitychange', 'webkitvisibilitychange', 'pagehide', 'blur', 'freeze']) {
     window.addEventListener(type, blockEvent, true);
@@ -55,10 +64,16 @@
 
   // Track whether a pause was something *you* asked for (tap in the page,
   // or the play/pause button on the lock screen / Control Center).
+  // Only finished taps count. The swipe up to the Home Screen starts as a
+  // touch on the page, but iOS cancels it, so it never reaches touchend.
   let lastIntentAt = 0;
   const markIntent = () => { lastIntentAt = Date.now(); };
-  for (const type of ['pointerdown', 'touchstart', 'mousedown', 'keydown', 'click']) {
+  const cancelIntent = () => { lastIntentAt = 0; };
+  for (const type of ['touchend', 'pointerup', 'mouseup', 'keydown', 'click']) {
     window.addEventListener(type, markIntent, true);
+  }
+  for (const type of ['touchcancel', 'pointercancel']) {
+    window.addEventListener(type, cancelIntent, true);
   }
 
   const ms = navigator.mediaSession;
@@ -142,8 +157,36 @@
     try { if (ms) ms.playbackState = 'playing'; } catch (_) {}
   }
 
-  // If the video gets paused while the screen is off and nobody asked for
-  // it, start it again.
+  // If the video gets paused while Safari is in the background (Home
+  // Screen, another app, screen off) and nobody asked for it, start it again.
+  const userPaused = () => Date.now() - lastIntentAt < 1500;
+  const inBackground = () => realHidden() || Date.now() - lastBackgroundAt < 3000;
+
+  function resumeInBackground(v) {
+    LOG('background pause detected, resuming');
+    v.play().catch(() => {});                 // straight away, while iOS still lets us
+    try { if (ms) ms.playbackState = 'playing'; } catch (_) {}
+    let tries = 0;
+    const retry = () => {
+      if (!v.paused || v.ended || userPaused() || tries++ > 8) return;
+      v.play().catch(() => {});
+      setTimeout(retry, 500);
+    };
+    setTimeout(retry, 150);
+  }
+
+  // iOS can pause the video a moment *before* the page reports that it
+  // went to the background. Remember such a pause briefly and resume it
+  // once the background event arrives.
+  let pendingPause = null;
+  onBackground = () => {
+    const p = pendingPause;
+    pendingPause = null;
+    if (p && Date.now() < p.until && p.video.paused && !p.video.ended && !userPaused()) {
+      resumeInBackground(p.video);
+    }
+  };
+
   const hooked = new WeakSet();
   function hookVideo(v) {
     if (hooked.has(v)) return;
@@ -158,19 +201,13 @@
       const now = Date.now();
       if (v.ended) return;
       if (now - wasPlayingAt > 4000) return;          // wasn't really playing
-      if (now - lastIntentAt < 1500) {                 // user paused
+      if (userPaused()) {                             // you paused it
+        pendingPause = null;
         if (!isAdShowing()) startHold(v);
         return;
       }
-      if (!realHidden()) return;                      // only fight background pauses
-      LOG('background pause detected, resuming');
-      let tries = 0;
-      const retry = () => {
-        if (!v.paused || v.ended || Date.now() - lastIntentAt < 1500 || tries++ > 5) return;
-        v.play().catch(() => {});
-        setTimeout(retry, 600);
-      };
-      setTimeout(retry, 150);
+      if (inBackground()) { resumeInBackground(v); return; }
+      pendingPause = { video: v, until: now + 2000 }; // background event may follow
     });
   }
 

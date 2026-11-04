@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Hide YouTube Shorts",
+  "short_name": "Hide Shorts",
+  "version": "1.0.0",
+  "description": "Removes YouTube Shorts from your feed, search, recommendations and navigation, and opens Shorts links in the normal player.",
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png",
+    "256": "icons/icon-256.png",
+    "512": "icons/icon-512.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*"],
+      "js": ["hide-shorts.user.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "browser_specific_settings": {
+    "safari": { "strict_min_version": "15.4" }
+  }
+}
