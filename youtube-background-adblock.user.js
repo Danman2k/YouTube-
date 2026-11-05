@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Background Play + Ad Block
 // @namespace    https://github.com/danman2k/youtube-
-// @version      1.2.0
+// @version      1.3.0
 // @description  Keeps YouTube playing with the screen off / Safari in the background, and blocks or skips ads. Built for Safari on iPhone via the "Userscripts" app.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -22,6 +22,12 @@
   // button after you pause, so pressing play resumes YouTube instead of
   // Apple Music. Set to 0 to turn this off.
   const HOLD_PLAY_BUTTON_MINUTES = 30;
+
+  // Headphone double-click ("next track") skips ahead this many seconds
+  // instead of jumping to the next video; triple-click goes back. The
+  // lock-screen next/previous buttons do the same. Set to 0 to keep
+  // YouTube's normal next/previous video behaviour.
+  const HEADPHONE_SKIP_SECONDS = 15;
 
   const LOG = (...a) => { try { console.debug('[yt-bg-ab]', ...a); } catch (_) {} };
 
@@ -80,6 +86,11 @@
   if (ms && typeof ms.setActionHandler === 'function') {
     const origSet = ms.setActionHandler.bind(ms);
     const pageHandlers = {};
+    const SKIP_ACTIONS = { nexttrack: 1, seekforward: 1, previoustrack: -1, seekbackward: -1 };
+    const skipHandler = (action) => (details) => {
+      const secs = (details && details.seekOffset) || HEADPHONE_SKIP_SECONDS;
+      skipBy(SKIP_ACTIONS[action] * secs);
+    };
     const wrap = (action) => (details) => {
       markIntent();
       if (hold && (action === 'play' || action === 'pause')) return resumeFromHold();
@@ -94,9 +105,28 @@
         pageHandlers[action] = handler || null;
         return origSet(action, wrap(action));
       }
+      if (HEADPHONE_SKIP_SECONDS > 0 && action in SKIP_ACTIONS) {
+        pageHandlers[action] = handler || null;
+        return origSet(action, skipHandler(action));
+      }
       return origSet(action, handler);
     };
     for (const a of ['play', 'pause']) { try { origSet(a, wrap(a)); } catch (_) {} }
+    if (HEADPHONE_SKIP_SECONDS > 0) {
+      for (const a of Object.keys(SKIP_ACTIONS)) { try { origSet(a, skipHandler(a)); } catch (_) {} }
+    }
+  }
+
+  // Jump forward (positive) or back (negative) in the current video.
+  // Ignored while an ad is playing, so the ad skipper stays in charge.
+  function skipBy(seconds) {
+    try {
+      const v = getVideo();
+      if (!v || isAdShowing()) return;
+      const end = isFinite(v.duration) ? Math.max(0, v.duration - 0.5) : Infinity;
+      v.currentTime = Math.min(end, Math.max(0, v.currentTime + seconds));
+      LOG('skipped', seconds, 's');
+    } catch (_) {}
   }
 
   // KEEP THE PLAY BUTTON: once nothing is playing, iOS gives the

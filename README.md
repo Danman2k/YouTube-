@@ -46,6 +46,7 @@ The only difference from a web app is that Safari's address bar stays visible.
 - **If audio stops when you lock the phone or go to the Home Screen,** press **Play** on the lock screen or in Control Center. It will keep going from then on. iOS sometimes pauses media at the moment Safari goes to the background. The script resumes it automatically, but iOS doesn't always allow that.
 - Lock-screen and Control Center play/pause buttons work as normal. The script only restarts pauses you didn't ask for.
 - **The play button stays with YouTube after you pause.** For 30 minutes after a pause, the script loops a silent sound so iOS keeps Safari as the "Now Playing" app. Pressing play on the lock screen, in Control Center or on your headphones resumes YouTube instead of starting Apple Music. If you open another music app, the script lets go immediately. To change the time, edit `HOLD_PLAY_BUTTON_MINUTES` at the top of the script (`0` turns this off).
+- **Headphone double-click skips 15 seconds.** Double-click (or double-squeeze AirPods) to jump ahead 15 seconds instead of going to the next video. Triple-click goes back 15 seconds. The lock-screen next/previous buttons do the same. To change the time, edit `HEADPHONE_SKIP_SECONDS` at the top of the script (`0` brings back YouTube's next/previous video).
 - **Picture-in-Picture:** start a video in fullscreen, then swipe home.
 
 ## Limitations
@@ -58,6 +59,7 @@ The only difference from a web app is that Safari's address bar stays visible.
 | Feature | Technique |
 | --- | --- |
 | Background play | Fakes `document.hidden` / `visibilityState` and blocks `visibilitychange`, so YouTube never sees that the page went to the background. Pauses you didn't ask for (no finished tap and no lock-screen button) are resumed, including ones iOS makes just before the page reports that it went to the background. |
+| Headphone skip | Takes over the Media Session `nexttrack` / `previoustrack` (and `seekforward` / `seekbackward`) actions, which iOS sends for headphone double/triple clicks, and seeks ±15 s instead of letting YouTube change video. Ignored while an ad plays. |
 | Ad removal | Hooks `JSON.parse`, `Response.json` and `ytInitialPlayerResponse`, and deletes `adPlacements`, `adSlots` and `playerAds` from the player data. |
 | Ad skipping | Every 300 ms: when the player shows `ad-showing`, the script mutes the ad, sets 16× speed, seeks to the end and clicks "Skip". |
 | Page ads | CSS hides ad and promo elements on m.youtube.com, www.youtube.com and music.youtube.com. |
