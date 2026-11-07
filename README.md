@@ -47,7 +47,7 @@ The only difference from a web app is that Safari's address bar stays visible.
 - Lock-screen and Control Center play/pause buttons work as normal. The script only restarts pauses you didn't ask for.
 - **The play button stays with YouTube after you pause.** For 30 minutes after a pause, the script loops a silent sound so iOS keeps Safari as the "Now Playing" app. Pressing play on the lock screen, in Control Center or on your headphones resumes YouTube instead of starting Apple Music. If you open another music app, the script lets go immediately. To change the time, edit `HOLD_PLAY_BUTTON_MINUTES` at the top of the script (`0` turns this off).
 - **Headphone double-click skips 15 seconds.** Double-click (or double-squeeze AirPods) to jump ahead 15 seconds instead of going to the next video. Triple-click goes back 15 seconds. The lock-screen next/previous buttons do the same. To change the time, edit `HEADPHONE_SKIP_SECONDS` at the top of the script (`0` brings back YouTube's next/previous video).
-- **Turn the phone sideways for full screen.** On a video page, rotating to landscape makes the video fill the whole screen; turning back upright returns to the normal page. To turn this off, set `LANDSCAPE_FILL_SCREEN = false` at the top of the script.
+- **Turn the phone sideways for full screen.** On a video page, rotating to landscape opens iOS's full-screen player. iOS usually asks for one tap first, so a **"Tap for full screen"** layer appears; tap anywhere on it. Turning the phone upright again leaves full screen. To turn this off, set `LANDSCAPE_FULLSCREEN = false` at the top of the script.
 - **Picture-in-Picture:** start a video in fullscreen, then swipe home.
 
 ## Limitations
@@ -55,7 +55,7 @@ The only difference from a web app is that Safari's address bar stays visible.
 - YouTube keeps changing how ads are delivered. Sometimes it splices them directly into the video stream, and then they can't be removed in advance. When that happens the script falls back to muting and fast-forwarding the ad. If ads start getting through more often, the selectors in the script may need an update.
 - Blocking ads goes against YouTube's Terms of Service. This is for personal use; YouTube Premium is the officially supported way to get these features.
 
-- **Landscape full screen isn't iOS's own fullscreen player.** iOS only allows real fullscreen after a tap, not on rotation, so the script stretches the player to cover the screen instead. Safari may still show a thin address bar at the top or bottom; scroll or tap to hide it. For iOS's fullscreen player, tap YouTube's fullscreen button as usual.
+- **Rotating needs one tap for full screen.** iOS only opens full screen after a real tap, and that includes pressing YouTube's fullscreen button from a script. The script tries straight away, then shows the tap layer if iOS refuses. The layer goes away after 8 seconds if you don't tap it. Make sure Rotation Lock is off.
 
 ## How it works
 
@@ -63,7 +63,7 @@ The only difference from a web app is that Safari's address bar stays visible.
 | --- | --- |
 | Background play | Fakes `document.hidden` / `visibilityState` and blocks `visibilitychange`, so YouTube never sees that the page went to the background. Pauses you didn't ask for (no finished tap and no lock-screen button) are resumed, including ones iOS makes just before the page reports that it went to the background. |
 | Headphone skip | Takes over the Media Session `nexttrack` / `previoustrack` (and `seekforward` / `seekbackward`) actions, which iOS sends for headphone double/triple clicks, and seeks ±15 s instead of letting YouTube change video. Ignored while an ad plays. |
-| Landscape full screen | Watches `(orientation: landscape)`. On `/watch` pages on touch devices, the player gets `position: fixed` covering the viewport (100vw × 100dvh, top layer, black background), its ancestors lose any `transform` that would trap it, and page scrolling is locked. All of this is undone when the phone is upright again. |
+| Landscape full screen | Watches `(orientation: landscape)`. Once per rotation on `/watch` pages on touch devices, it calls `video.webkitEnterFullscreen()` (iPhone) or `requestFullscreen()`. If that's refused for lack of a tap, a full-screen tap layer calls it again inside the tap's `touchend`, which iOS accepts. Turning upright calls `webkitExitFullscreen()` / `exitFullscreen()`, which needs no tap. |
 | Ad removal | Hooks `JSON.parse`, `Response.json` and `ytInitialPlayerResponse`, and deletes `adPlacements`, `adSlots` and `playerAds` from the player data. |
 | Ad skipping | Every 300 ms: when the player shows `ad-showing`, the script mutes the ad, sets 16× speed, seeks to the end and clicks "Skip". |
 | Page ads | CSS hides ad and promo elements on m.youtube.com, www.youtube.com and music.youtube.com. |

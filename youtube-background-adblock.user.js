@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Background Play + Ad Block
 // @namespace    https://github.com/danman2k/youtube-
-// @version      1.4.0
+// @version      1.5.0
 // @description  Keeps YouTube playing with the screen off / Safari in the background, and blocks or skips ads. Built for Safari on iPhone via the "Userscripts" app.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -29,10 +29,10 @@
   // YouTube's normal next/previous video behaviour.
   const HEADPHONE_SKIP_SECONDS = 15;
 
-  // Turn the phone sideways on a video page and the video fills the whole
-  // screen; turn it back upright to return to the normal page. Set to false
-  // to turn this off.
-  const LANDSCAPE_FILL_SCREEN = true;
+  // Turn the phone sideways on a video page to open the full-screen player
+  // (iOS needs one tap, so a "Tap for full screen" layer appears); turn it
+  // back upright to leave full screen. Set to false to turn this off.
+  const LANDSCAPE_FULLSCREEN = true;
 
   const LOG = (...a) => { try { console.debug('[yt-bg-ab]', ...a); } catch (_) {} };
 
@@ -356,78 +356,114 @@
 
   /* ------------------------------------------------------------------ *
    * LANDSCAPE = FULL SCREEN
-   *    iOS only allows real fullscreen after a tap, so on rotation we make
-   *    the player cover the whole screen with CSS instead.
+   *    iOS only opens the full-screen player from a real tap, so on
+   *    rotation we try once, and if iOS refuses we show a tap layer.
    * ------------------------------------------------------------------ */
 
-  const FILL_ATTR = 'data-ytbgab-fill';
-  const FILL_ANCESTOR_ATTR = 'data-ytbgab-fill-ancestor';
   const landscapeQuery = window.matchMedia ? window.matchMedia('(orientation: landscape)') : null;
+  let fsOverlay = null;
+  let fsOverlayTimer = 0;
+  let wasLandscape = false;
+  let lastFsUrl = '';
 
-  function clearFill() {
+  const isLandscape = () => (landscapeQuery ? landscapeQuery.matches : window.innerWidth > window.innerHeight);
+  const isTouch = () => 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  const onWatchPage = () => location.pathname === '/watch' || location.pathname.startsWith('/live/');
+
+  function isFullscreen() {
+    const v = getVideo();
+    return !!(document.fullscreenElement || document.webkitFullscreenElement || (v && v.webkitDisplayingFullscreen));
+  }
+
+  function enterFullscreen() {
+    const v = getVideo();
+    if (!v) return;
+    // iPhone: the native full-screen video player.
+    try { if (typeof v.webkitEnterFullscreen === 'function') { v.webkitEnterFullscreen(); return; } } catch (_) {}
+    // iPad / others: the whole YouTube player, like its own button does.
     try {
-      document.documentElement.classList.remove('ytbgab-fill');
-      document.querySelectorAll('[' + FILL_ATTR + '], [' + FILL_ANCESTOR_ATTR + ']').forEach((el) => {
-        el.removeAttribute(FILL_ATTR);
-        el.removeAttribute(FILL_ANCESTOR_ATTR);
-      });
+      const el = v.closest('.html5-video-player') || v;
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (req) { const r = req.call(el); if (r && r.catch) r.catch(() => {}); return; }
+    } catch (_) {}
+    try {
+      const btn = document.querySelector('.ytp-fullscreen-button, button.fullscreen-icon, .fullscreen-action-menu button, [aria-label*="ull screen" i]');
+      if (btn) btn.click();
     } catch (_) {}
   }
 
-  function updateLandscapeFill() {
+  function exitFullscreen() {
     try {
-      if (!LANDSCAPE_FILL_SCREEN || !document.documentElement) return;
-      const landscape = landscapeQuery ? landscapeQuery.matches : window.innerWidth > window.innerHeight;
-      const onWatchPage = location.pathname === '/watch' || location.pathname.startsWith('/live/');
-      // Only phones/tablets: a desktop browser window is usually "landscape".
-      const touch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
       const v = getVideo();
-      const player = v && (v.closest('.html5-video-player') || v.parentElement);
-      if (!(landscape && onWatchPage && touch && player && !document.webkitFullscreenElement && !document.fullscreenElement)) {
-        if (document.documentElement.classList.contains('ytbgab-fill')) clearFill();
+      if (v && v.webkitDisplayingFullscreen && typeof v.webkitExitFullscreen === 'function') v.webkitExitFullscreen();
+      else if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+      else if (document.webkitFullscreenElement && document.webkitExitFullscreen) document.webkitExitFullscreen();
+    } catch (_) {}
+  }
+
+  function hideFsOverlay() {
+    clearTimeout(fsOverlayTimer);
+    if (fsOverlay) { try { fsOverlay.remove(); } catch (_) {} fsOverlay = null; }
+  }
+
+  function showFsOverlay() {
+    if (fsOverlay || !document.body) return;
+    const o = document.createElement('div');
+    o.id = 'ytbgab-fs-tap';
+    o.setAttribute('role', 'button');
+    o.setAttribute('aria-label', 'Tap for full screen');
+    o.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;' +
+      'background:rgba(0,0,0,.25);-webkit-tap-highlight-color:transparent;touch-action:manipulation;';
+    const pill = document.createElement('div');
+    pill.textContent = '⛶  Tap for full screen';
+    pill.style.cssText = 'padding:12px 20px;border-radius:999px;background:rgba(0,0,0,.75);color:#fff;' +
+      'font:600 17px -apple-system,system-ui,sans-serif;pointer-events:none;';
+    o.appendChild(pill);
+    // Enter full screen directly inside the tap, which iOS accepts.
+    const go = (e) => {
+      try { e.preventDefault(); e.stopPropagation(); } catch (_) {}
+      hideFsOverlay();
+      enterFullscreen();
+    };
+    o.addEventListener('touchend', go, { passive: false });
+    o.addEventListener('click', go);
+    document.body.appendChild(o);
+    fsOverlay = o;
+    fsOverlayTimer = setTimeout(hideFsOverlay, 8000);
+  }
+
+  function updateLandscapeFullscreen() {
+    try {
+      if (!LANDSCAPE_FULLSCREEN || !isTouch()) return;
+      const landscape = isLandscape();
+      if (!landscape) {
+        hideFsOverlay();
+        if (wasLandscape && isFullscreen()) exitFullscreen();
+        wasLandscape = false;
+        lastFsUrl = '';
         return;
       }
-      if (player.hasAttribute(FILL_ATTR) && document.documentElement.classList.contains('ytbgab-fill')) return;
-      clearFill();
-      player.setAttribute(FILL_ATTR, '');
-      // A transformed ancestor would trap position:fixed inside it.
-      for (let el = player.parentElement; el && el !== document.body; el = el.parentElement) {
-        el.setAttribute(FILL_ANCESTOR_ATTR, '');
-      }
-      document.documentElement.classList.add('ytbgab-fill');
-      window.scrollTo(0, 0);
-      // Let YouTube re-lay out its controls for the new size.
-      setTimeout(() => { try { window.dispatchEvent(new Event('resize')); } catch (_) {} }, 50);
-      LOG('landscape fill on');
+      const url = location.href;
+      // Act once per rotation (or per new video while sideways).
+      if (wasLandscape && url === lastFsUrl) return;
+      if (!onWatchPage() || !getVideo()) return;
+      wasLandscape = true;
+      lastFsUrl = url;
+      if (isFullscreen()) return;
+      enterFullscreen();
+      setTimeout(() => { if (isLandscape() && !isFullscreen()) showFsOverlay(); }, 400);
     } catch (_) {}
   }
 
-  if (LANDSCAPE_FILL_SCREEN) {
+  if (LANDSCAPE_FULLSCREEN) {
     if (landscapeQuery) {
-      try { landscapeQuery.addEventListener('change', updateLandscapeFill); }
-      catch (_) { try { landscapeQuery.addListener(updateLandscapeFill); } catch (__) {} }
+      try { landscapeQuery.addEventListener('change', updateLandscapeFullscreen); }
+      catch (_) { try { landscapeQuery.addListener(updateLandscapeFullscreen); } catch (__) {} }
     }
-    window.addEventListener('orientationchange', () => setTimeout(updateLandscapeFill, 100));
-    setInterval(updateLandscapeFill, 500);
+    window.addEventListener('orientationchange', () => setTimeout(updateLandscapeFullscreen, 100));
+    window.addEventListener('resize', updateLandscapeFullscreen);
+    setInterval(updateLandscapeFullscreen, 500);
   }
-
-  const FILL_CSS = `
-    html.ytbgab-fill, html.ytbgab-fill body { overflow: hidden !important; }
-    html.ytbgab-fill [${FILL_ANCESTOR_ATTR}] {
-      transform: none !important; filter: none !important; contain: none !important;
-      will-change: auto !important; z-index: 2147483646 !important;
-    }
-    html.ytbgab-fill [${FILL_ATTR}] {
-      position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
-      width: 100vw !important; height: 100vh !important; height: 100dvh !important;
-      max-width: none !important; max-height: none !important; margin: 0 !important;
-      transform: none !important; z-index: 2147483647 !important; background: #000 !important;
-    }
-    html.ytbgab-fill [${FILL_ATTR}] video {
-      position: absolute !important; top: 0 !important; left: 0 !important;
-      width: 100% !important; height: 100% !important; object-fit: contain !important;
-    }
-  `;
 
   /* ------------------------------------------------------------------ *
    * 4. AD BLOCKING (layer 3): hide banner, feed and sponsored ads
@@ -454,7 +490,7 @@
     if (!root) { setTimeout(injectCss, 50); return; }
     const s = document.createElement('style');
     s.id = 'ytbgab-style';
-    s.textContent = CSS + (LANDSCAPE_FILL_SCREEN ? FILL_CSS : '');
+    s.textContent = CSS;
     root.appendChild(s);
   }
   injectCss();
