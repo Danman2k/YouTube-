@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Background Play + Ad Block
 // @namespace    https://github.com/danman2k/youtube-
-// @version      1.3.0
+// @version      1.4.0
 // @description  Keeps YouTube playing with the screen off / Safari in the background, and blocks or skips ads. Built for Safari on iPhone via the "Userscripts" app.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -28,6 +28,11 @@
   // lock-screen next/previous buttons do the same. Set to 0 to keep
   // YouTube's normal next/previous video behaviour.
   const HEADPHONE_SKIP_SECONDS = 15;
+
+  // Turn the phone sideways on a video page and the video fills the whole
+  // screen; turn it back upright to return to the normal page. Set to false
+  // to turn this off.
+  const LANDSCAPE_FILL_SCREEN = true;
 
   const LOG = (...a) => { try { console.debug('[yt-bg-ab]', ...a); } catch (_) {} };
 
@@ -350,6 +355,81 @@
   setInterval(adTick, 300);
 
   /* ------------------------------------------------------------------ *
+   * LANDSCAPE = FULL SCREEN
+   *    iOS only allows real fullscreen after a tap, so on rotation we make
+   *    the player cover the whole screen with CSS instead.
+   * ------------------------------------------------------------------ */
+
+  const FILL_ATTR = 'data-ytbgab-fill';
+  const FILL_ANCESTOR_ATTR = 'data-ytbgab-fill-ancestor';
+  const landscapeQuery = window.matchMedia ? window.matchMedia('(orientation: landscape)') : null;
+
+  function clearFill() {
+    try {
+      document.documentElement.classList.remove('ytbgab-fill');
+      document.querySelectorAll('[' + FILL_ATTR + '], [' + FILL_ANCESTOR_ATTR + ']').forEach((el) => {
+        el.removeAttribute(FILL_ATTR);
+        el.removeAttribute(FILL_ANCESTOR_ATTR);
+      });
+    } catch (_) {}
+  }
+
+  function updateLandscapeFill() {
+    try {
+      if (!LANDSCAPE_FILL_SCREEN || !document.documentElement) return;
+      const landscape = landscapeQuery ? landscapeQuery.matches : window.innerWidth > window.innerHeight;
+      const onWatchPage = location.pathname === '/watch' || location.pathname.startsWith('/live/');
+      // Only phones/tablets: a desktop browser window is usually "landscape".
+      const touch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      const v = getVideo();
+      const player = v && (v.closest('.html5-video-player') || v.parentElement);
+      if (!(landscape && onWatchPage && touch && player && !document.webkitFullscreenElement && !document.fullscreenElement)) {
+        if (document.documentElement.classList.contains('ytbgab-fill')) clearFill();
+        return;
+      }
+      if (player.hasAttribute(FILL_ATTR) && document.documentElement.classList.contains('ytbgab-fill')) return;
+      clearFill();
+      player.setAttribute(FILL_ATTR, '');
+      // A transformed ancestor would trap position:fixed inside it.
+      for (let el = player.parentElement; el && el !== document.body; el = el.parentElement) {
+        el.setAttribute(FILL_ANCESTOR_ATTR, '');
+      }
+      document.documentElement.classList.add('ytbgab-fill');
+      window.scrollTo(0, 0);
+      // Let YouTube re-lay out its controls for the new size.
+      setTimeout(() => { try { window.dispatchEvent(new Event('resize')); } catch (_) {} }, 50);
+      LOG('landscape fill on');
+    } catch (_) {}
+  }
+
+  if (LANDSCAPE_FILL_SCREEN) {
+    if (landscapeQuery) {
+      try { landscapeQuery.addEventListener('change', updateLandscapeFill); }
+      catch (_) { try { landscapeQuery.addListener(updateLandscapeFill); } catch (__) {} }
+    }
+    window.addEventListener('orientationchange', () => setTimeout(updateLandscapeFill, 100));
+    setInterval(updateLandscapeFill, 500);
+  }
+
+  const FILL_CSS = `
+    html.ytbgab-fill, html.ytbgab-fill body { overflow: hidden !important; }
+    html.ytbgab-fill [${FILL_ANCESTOR_ATTR}] {
+      transform: none !important; filter: none !important; contain: none !important;
+      will-change: auto !important; z-index: 2147483646 !important;
+    }
+    html.ytbgab-fill [${FILL_ATTR}] {
+      position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+      width: 100vw !important; height: 100vh !important; height: 100dvh !important;
+      max-width: none !important; max-height: none !important; margin: 0 !important;
+      transform: none !important; z-index: 2147483647 !important; background: #000 !important;
+    }
+    html.ytbgab-fill [${FILL_ATTR}] video {
+      position: absolute !important; top: 0 !important; left: 0 !important;
+      width: 100% !important; height: 100% !important; object-fit: contain !important;
+    }
+  `;
+
+  /* ------------------------------------------------------------------ *
    * 4. AD BLOCKING (layer 3): hide banner, feed and sponsored ads
    * ------------------------------------------------------------------ */
 
@@ -374,7 +454,7 @@
     if (!root) { setTimeout(injectCss, 50); return; }
     const s = document.createElement('style');
     s.id = 'ytbgab-style';
-    s.textContent = CSS;
+    s.textContent = CSS + (LANDSCAPE_FILL_SCREEN ? FILL_CSS : '');
     root.appendChild(s);
   }
   injectCss();
