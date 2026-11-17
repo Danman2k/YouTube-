@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Background Play + Ad Block
 // @namespace    https://github.com/danman2k/youtube-
-// @version      1.3.0
+// @version      1.4.0
 // @description  Keeps YouTube playing with the screen off / Safari in the background, and blocks or skips ads. Built for Safari on iPhone via the "Userscripts" app.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -22,6 +22,11 @@
   // button after you pause, so pressing play resumes YouTube instead of
   // Apple Music. Set to 0 to turn this off.
   const HOLD_PLAY_BUTTON_MINUTES = 30;
+
+  // While a video plays, also loop a silent sound. iOS may pause the video
+  // when the screen locks, but keeps the sound going, so Safari stays awake
+  // long enough to restart the video. Set to false to turn this off.
+  const KEEP_ALIVE_WHILE_PLAYING = true;
 
   // Hide the Like / Dislike / Share / Save buttons and the "In this video"
   // chip that YouTube sometimes draws on top of the player's own controls.
@@ -71,12 +76,27 @@
   // or the play/pause button on the lock screen / Control Center).
   // Only finished taps count. The swipe up to the Home Screen starts as a
   // touch on the page, but iOS cancels it, so it never reaches touchend.
+  // Only taps on the player (or a play/pause button) count, so a tap
+  // elsewhere just before pressing the side button doesn't look like a pause.
   let lastIntentAt = 0;
   const markIntent = () => { lastIntentAt = Date.now(); };
   const cancelIntent = () => { lastIntentAt = 0; };
-  for (const type of ['touchend', 'pointerup', 'mouseup', 'keydown', 'click']) {
-    window.addEventListener(type, markIntent, true);
+  const INTENT_TARGETS = '#player-container-id, .player-container, ytm-player, #movie_player, .html5-video-player, ' +
+    'ytd-player, video, [class*="miniplayer"], ytmusic-player-bar, ytmusic-player';
+  const markTapIntent = (e) => {
+    try {
+      const t = e.target && e.target.closest ? e.target : (e.target && e.target.parentElement);
+      if (!t) return;
+      if (t.closest(INTENT_TARGETS)) return markIntent();
+      const b = t.closest('button, [role="button"]');
+      const l = b ? (b.getAttribute('aria-label') || b.getAttribute('title') || b.textContent || '') : '';
+      if (/\b(play|pause)\b/i.test(l)) markIntent();
+    } catch (_) {}
+  };
+  for (const type of ['touchend', 'pointerup', 'mouseup', 'click']) {
+    window.addEventListener(type, markTapIntent, true);
   }
+  window.addEventListener('keydown', markIntent, true);
   for (const type of ['touchcancel', 'pointercancel']) {
     window.addEventListener(type, cancelIntent, true);
   }
@@ -109,6 +129,8 @@
   // paused we loop a silent sound so Safari stays the "Now Playing" app.
   let hold = null;
   let holdAudio = null;
+  let stoppingAudio = false;
+  let lastVideoActiveAt = 0;   // last time a video was playing or being resumed
 
   function silentWavUrl() {
     const rate = 8000, n = rate; // 1 second, 8-bit mono, silent
@@ -129,7 +151,7 @@
       holdAudio.loop = true;
       holdAudio.setAttribute('playsinline', '');
       // Paused by someone else (e.g. you started Apple Music): let go.
-      holdAudio.addEventListener('pause', () => { if (hold) endHold(); });
+      holdAudio.addEventListener('pause', () => { if (!stoppingAudio && hold) endHold(); });
     }
     return holdAudio;
   }
@@ -148,48 +170,95 @@
     }).catch(() => { hold = null; });
   }
 
-  function endHold() {
-    if (!hold) return;
-    clearTimeout(hold.timer);
-    hold = null;
-    if (holdAudio && !holdAudio.paused) holdAudio.pause();
+  function stopSilentAudio() {
+    if (!holdAudio || holdAudio.paused) return;
+    stoppingAudio = true;
+    try { holdAudio.pause(); } catch (_) {}
+    stoppingAudio = false;
   }
+
+  // keepAudio: the video is playing again, so keep the silent sound going
+  // as the keep-alive instead of stopping it.
+  function endHold(keepAudio) {
+    if (hold) { clearTimeout(hold.timer); hold = null; }
+    if (!keepAudio) stopSilentAudio();
+  }
+
+  function startKeepAlive() {
+    if (!KEEP_ALIVE_WHILE_PLAYING) return;
+    try {
+      const a = getHoldAudio();
+      if (a.paused) a.play().catch(() => {});
+    } catch (_) {}
+  }
+
+  // Stop the keep-alive once nothing has played for a while (and we aren't
+  // holding the play button), so it never loops forever.
+  setInterval(() => {
+    if (hold || !holdAudio || holdAudio.paused) return;
+    const v = getVideo();
+    if (v && !v.paused) { lastVideoActiveAt = Date.now(); return; }
+    if (Date.now() - lastVideoActiveAt > 20000) stopSilentAudio();
+  }, 2000);
 
   function resumeFromHold() {
     const v = (hold && hold.video && hold.video.isConnected) ? hold.video : getVideo();
     if (v) v.play().catch(() => {});
-    endHold();
+    endHold(true);
     try { if (ms) ms.playbackState = 'playing'; } catch (_) {}
   }
 
   // If the video gets paused while Safari is in the background (Home
   // Screen, another app, screen off) and nobody asked for it, start it again.
-  const userPaused = () => Date.now() - lastIntentAt < 1500;
-  const inBackground = () => realHidden() || Date.now() - lastBackgroundAt < 3000;
+  const userPaused = () => Date.now() - lastIntentAt < 1000;
+  const inBackground = () => realHidden() || Date.now() - lastBackgroundAt < 5000;
 
+  let resuming = null;
   function resumeInBackground(v) {
+    if (resuming === v) return;
+    resuming = v;
     LOG('background pause detected, resuming');
+    lastVideoActiveAt = Date.now();
     v.play().catch(() => {});                 // straight away, while iOS still lets us
     try { if (ms) ms.playbackState = 'playing'; } catch (_) {}
-    let tries = 0;
+    // Keep trying for about 15 s, slowing down as we go.
+    const delays = [150, 300, 500, 500, 750, 750, 1000, 1000, 1500, 1500, 2000, 2000, 3000];
+    let i = 0;
     const retry = () => {
-      if (!v.paused || v.ended || userPaused() || tries++ > 8) return;
+      if (!v.paused || v.ended || userPaused()) { resuming = null; return; }
+      if (i >= delays.length) {
+        // iOS won't let us restart it. Keep the play button for YouTube so
+        // one press on the lock screen continues the video.
+        resuming = null;
+        LOG('could not resume, holding play button');
+        try { if (ms) ms.playbackState = 'paused'; } catch (_) {}
+        startHold(v);
+        return;
+      }
+      lastVideoActiveAt = Date.now();
       v.play().catch(() => {});
-      setTimeout(retry, 500);
+      setTimeout(retry, delays[i++]);
     };
-    setTimeout(retry, 150);
+    setTimeout(retry, delays[i++]);
   }
 
   // iOS can pause the video a moment *before* the page reports that it
   // went to the background. Remember such a pause briefly and resume it
   // once the background event arrives.
   let pendingPause = null;
+  let lastPlayingAt = 0;
   onBackground = () => {
     const p = pendingPause;
     pendingPause = null;
-    if (p && Date.now() < p.until && p.video.paused && !p.video.ended && !userPaused()) {
+    if (userPaused()) return;
+    if (p && Date.now() < p.until && p.video.paused && !p.video.ended) {
       resumeInBackground(p.video);
+      return;
     }
+    // Paused without a pause event we could judge, but it was playing a
+    // moment ago: resume it too.
+    const v = getVideo();
+    if (v && v.paused && !v.ended && Date.now() - lastPlayingAt < 5000 && !isAdShowing()) resumeInBackground(v);
   };
 
   const hooked = new WeakSet();
@@ -199,9 +268,11 @@
     v.removeAttribute('disablepictureinpicture');
     try { v.disablePictureInPicture = false; } catch (_) {}
     let wasPlayingAt = 0;
-    v.addEventListener('playing', () => { wasPlayingAt = Date.now(); endHold(); });
-    v.addEventListener('play', endHold);
-    v.addEventListener('timeupdate', () => { if (!v.paused) wasPlayingAt = Date.now(); });
+    const playingNow = () => { wasPlayingAt = lastPlayingAt = lastVideoActiveAt = Date.now(); };
+    v.addEventListener('playing', () => { playingNow(); endHold(true); startKeepAlive(); });
+    v.addEventListener('play', () => { endHold(true); startKeepAlive(); });
+    v.addEventListener('timeupdate', () => { if (!v.paused) playingNow(); });
+    v.addEventListener('ended', () => endHold());
     v.addEventListener('pause', () => {
       const now = Date.now();
       if (v.ended) return;
@@ -212,7 +283,7 @@
         return;
       }
       if (inBackground()) { resumeInBackground(v); return; }
-      pendingPause = { video: v, until: now + 2000 }; // background event may follow
+      pendingPause = { video: v, until: now + 5000 }; // background event may follow
     });
   }
 

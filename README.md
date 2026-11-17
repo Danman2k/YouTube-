@@ -43,7 +43,8 @@ The only difference from a web app is that Safari's address bar stays visible.
 ## Tips
 
 - **Use Safari itself.** The YouTube app and Home Screen *web apps* can't run extensions. See [Opening YouTube from your Home Screen](#opening-youtube-from-your-home-screen) for an icon that works.
-- **If audio stops when you lock the phone or go to the Home Screen,** press **Play** on the lock screen or in Control Center. It will keep going from then on. iOS sometimes pauses media at the moment Safari goes to the background. The script resumes it automatically, but iOS doesn't always allow that.
+- **If audio stops when you lock the phone or go to the Home Screen,** press **Play** on the lock screen or in Control Center. It will keep going from then on. iOS sometimes pauses media at the moment Safari goes to the background. The script keeps retrying for about 15 seconds. If iOS still won't allow it, the script keeps the lock-screen Play button pointed at YouTube, so one press continues the video.
+- **Silent keep-alive:** while a video plays, the script also loops a silent sound. iOS may pause the video when the screen locks but leaves the sound running, so Safari stays awake long enough to restart the video. It stops by itself about 20 seconds after nothing is playing. To turn it off, set `KEEP_ALIVE_WHILE_PLAYING` at the top of the script to `false`.
 - Lock-screen and Control Center play/pause buttons work as normal. The script only restarts pauses you didn't ask for.
 - **The play button stays with YouTube after you pause.** For 30 minutes after a pause, the script loops a silent sound so iOS keeps Safari as the "Now Playing" app. Pressing play on the lock screen, in Control Center or on your headphones resumes YouTube instead of starting Apple Music. If you open another music app, the script lets go immediately. To change the time, edit `HOLD_PLAY_BUTTON_MINUTES` at the top of the script (`0` turns this off).
 - **Picture-in-Picture:** start a video in fullscreen, then swipe home.
@@ -59,7 +60,7 @@ The only difference from a web app is that Safari's address bar stays visible.
 
 | Feature | Technique |
 | --- | --- |
-| Background play | Fakes `document.hidden` / `visibilityState` and blocks `visibilitychange`, so YouTube never sees that the page went to the background. Pauses you didn't ask for (no finished tap and no lock-screen button) are resumed, including ones iOS makes just before the page reports that it went to the background. |
+| Background play | Fakes `document.hidden` / `visibilityState` and blocks `visibilitychange`, so YouTube never sees that the page went to the background. Pauses you didn't ask for are resumed, with retries for about 15 seconds, including ones iOS makes up to 5 seconds before the page reports that it went to the background. Only a finished tap on the player or a play/pause button, a key press, or a lock-screen button counts as your pause, so a tap elsewhere just before locking doesn't. A looping silent sound runs alongside the video, so Safari isn't frozen while the script retries. |
 | Ad removal | Hooks `JSON.parse`, `Response.json` and `ytInitialPlayerResponse`, and deletes `adPlacements`, `adSlots` and `playerAds` from the player data. |
 | Ad skipping | Every 300 ms: when the player shows `ad-showing`, the script mutes the ad, sets 16× speed, seeks to the end and clicks "Skip". |
 | Player overlay clean-up | Every 500 ms: inside the player, finds Like / Dislike / Share / Save buttons and the "In this video" chip, walks up to the largest wrapper that holds no real player controls (play, time, progress bar) and hides it. |
