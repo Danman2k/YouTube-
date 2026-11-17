@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Background Play + Ad Block
 // @namespace    https://github.com/danman2k/youtube-
-// @version      1.2.0
+// @version      1.3.0
 // @description  Keeps YouTube playing with the screen off / Safari in the background, and blocks or skips ads. Built for Safari on iPhone via the "Userscripts" app.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -22,6 +22,11 @@
   // button after you pause, so pressing play resumes YouTube instead of
   // Apple Music. Set to 0 to turn this off.
   const HOLD_PLAY_BUTTON_MINUTES = 30;
+
+  // Hide the Like / Dislike / Share / Save buttons and the "In this video"
+  // chip that YouTube sometimes draws on top of the player's own controls.
+  // The normal buttons under the video stay. Set to false to turn this off.
+  const HIDE_PLAYER_OVERLAY_BUTTONS = true;
 
   const LOG = (...a) => { try { console.debug('[yt-bg-ab]', ...a); } catch (_) {} };
 
@@ -320,6 +325,81 @@
   setInterval(adTick, 300);
 
   /* ------------------------------------------------------------------ *
+   * 3b. PLAYER OVERLAY CLEAN-UP: hide Like / Dislike / Share / Save and
+   *     "In this video" when YouTube draws them over the player controls.
+   *     Matched by label rather than class name, so it survives renames.
+   * ------------------------------------------------------------------ */
+
+  const PLAYER_ROOTS = '#player-container-id, .player-container, ytm-player, #movie_player, .html5-video-player, ytd-player';
+  const OVERLAY_LABEL_RE = /^(like|dislike|i like this|i dislike this|share|save|save to playlist|in this video)\b/i;
+  // Things that belong to the real player and must never be hidden.
+  const PLAYER_CONTROL_SEL = [
+    'video', '[role="slider"]', 'ytm-progress-bar', '.ytm-progress-bar', '.ytp-progress-bar',
+    '.player-controls-middle', '.player-middle-controls', '.ytp-left-controls', '.ytp-chrome-controls',
+    '.ytm-time-display', '.ytp-time-display', '.player-settings-icon', '.ytp-settings-button',
+  ].join(',');
+  const PLAYER_BUTTON_LABEL_RE = /^(play|pause|replay|next|previous|seek|settings|subtitles|captions|cc|full ?screen|exit full|mute|unmute|autoplay|more options|miniplayer|picture)/i;
+
+  function labelOf(el) {
+    return ((el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title'))) || '').trim();
+  }
+
+  function holdsPlayerControls(el) {
+    try {
+      if (el.matches(PLAYER_CONTROL_SEL) || el.querySelector(PLAYER_CONTROL_SEL)) return true;
+      const btns = el.querySelectorAll('button, [role="button"]');
+      for (const b of btns) if (PLAYER_BUTTON_LABEL_RE.test(labelOf(b))) return true;
+      if (/\d+:\d\d\s*\/\s*\d+:\d\d/.test(el.textContent || '')) return true; // time readout
+    } catch (_) {}
+    return false;
+  }
+
+  // Walk up from a matched button to the largest wrapper that still holds no
+  // real player controls, so the whole floating pill or chip goes at once.
+  function overlayContainer(el, root) {
+    let top = el;
+    let cur = el.parentElement;
+    while (cur && cur !== root && root.contains(cur)) {
+      if (holdsPlayerControls(cur)) break;
+      top = cur;
+      cur = cur.parentElement;
+    }
+    return top;
+  }
+
+  function hideOverlayButtons() {
+    if (!HIDE_PLAYER_OVERLAY_BUTTONS) return;
+    try {
+      const roots = document.querySelectorAll(PLAYER_ROOTS);
+      roots.forEach((root) => {
+        if (root.parentElement && root.parentElement.closest(PLAYER_ROOTS)) return; // handle outermost only
+        const hits = [];
+        root.querySelectorAll('button, [role="button"], a, yt-chip-cloud-chip-renderer, ytm-chip-cloud-chip-renderer')
+          .forEach((b) => {
+            if (b.closest('[data-ytbgab-hide]')) return;
+            const label = labelOf(b) || (b.children.length <= 3 ? (b.textContent || '').trim() : '');
+            if (label && label.length < 60 && OVERLAY_LABEL_RE.test(label)) hits.push(b);
+          });
+        // A plain text "In this video" chip that isn't a button.
+        root.querySelectorAll('span, div, yt-formatted-string').forEach((e) => {
+          if (e.children.length === 0 && /^in this video$/i.test((e.textContent || '').trim()) && !e.closest('[data-ytbgab-hide]')) hits.push(e);
+        });
+        hits.forEach((b) => {
+          if (holdsPlayerControls(b)) return;
+          const c = overlayContainer(b, root);
+          if (c && c !== root && !c.hasAttribute('data-ytbgab-hide')) {
+            c.setAttribute('data-ytbgab-hide', '');
+            LOG('hid player overlay', label(c));
+          }
+        });
+      });
+    } catch (_) {}
+  }
+  function label(el) { try { return el.tagName.toLowerCase() + '.' + String(el.className || '').trim().replace(/\s+/g, '.'); } catch (_) { return ''; } }
+
+  setInterval(hideOverlayButtons, 500);
+
+  /* ------------------------------------------------------------------ *
    * 4. AD BLOCKING (layer 3): hide banner, feed and sponsored ads
    * ------------------------------------------------------------------ */
 
@@ -334,7 +414,7 @@
     ytm-companion-slot, ytm-rich-item-renderer:has(ad-slot-renderer), ytm-item-section-renderer:has(ad-slot-renderer),
     ytm-item-section-renderer:has(ytm-promoted-sparkles-web-renderer), ytm-statement-banner-renderer, ytm-mealbar-promo-renderer,
     .ytp-ad-overlay-container, .ytp-ad-overlay-slot, .ytp-ad-image-overlay, .ytp-suggested-action-badge,
-    ytmusic-mealbar-promo-renderer, ytmusic-statement-banner-renderer
+    ytmusic-mealbar-promo-renderer, ytmusic-statement-banner-renderer, [data-ytbgab-hide]
     { display: none !important; }
   `;
 

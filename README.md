@@ -47,10 +47,12 @@ The only difference from a web app is that Safari's address bar stays visible.
 - Lock-screen and Control Center play/pause buttons work as normal. The script only restarts pauses you didn't ask for.
 - **The play button stays with YouTube after you pause.** For 30 minutes after a pause, the script loops a silent sound so iOS keeps Safari as the "Now Playing" app. Pressing play on the lock screen, in Control Center or on your headphones resumes YouTube instead of starting Apple Music. If you open another music app, the script lets go immediately. To change the time, edit `HOLD_PLAY_BUTTON_MINUTES` at the top of the script (`0` turns this off).
 - **Picture-in-Picture:** start a video in fullscreen, then swipe home.
+- **Buttons over the player:** YouTube sometimes draws Like / Dislike / Share / Save and an "In this video" chip on top of the player's own controls, covering the time and progress bar. The script hides that overlay. The normal buttons under the video still work. To turn this off, set `HIDE_PLAYER_OVERLAY_BUTTONS` at the top of the script to `false`.
 
 ## Limitations
 
 - YouTube keeps changing how ads are delivered. Sometimes it splices them directly into the video stream, and then they can't be removed in advance. When that happens the script falls back to muting and fast-forwarding the ad. If ads start getting through more often, the selectors in the script may need an update.
+- The player overlay is found by its button labels (Like, Share, Save, "In this video"), not by YouTube's internal names. If YouTube changes the labels or the language isn't English, the overlay may show again.
 - Blocking ads goes against YouTube's Terms of Service. This is for personal use; YouTube Premium is the officially supported way to get these features.
 
 ## How it works
@@ -60,4 +62,5 @@ The only difference from a web app is that Safari's address bar stays visible.
 | Background play | Fakes `document.hidden` / `visibilityState` and blocks `visibilitychange`, so YouTube never sees that the page went to the background. Pauses you didn't ask for (no finished tap and no lock-screen button) are resumed, including ones iOS makes just before the page reports that it went to the background. |
 | Ad removal | Hooks `JSON.parse`, `Response.json` and `ytInitialPlayerResponse`, and deletes `adPlacements`, `adSlots` and `playerAds` from the player data. |
 | Ad skipping | Every 300 ms: when the player shows `ad-showing`, the script mutes the ad, sets 16× speed, seeks to the end and clicks "Skip". |
+| Player overlay clean-up | Every 500 ms: inside the player, finds Like / Dislike / Share / Save buttons and the "In this video" chip, walks up to the largest wrapper that holds no real player controls (play, time, progress bar) and hides it. |
 | Page ads | CSS hides ad and promo elements on m.youtube.com, www.youtube.com and music.youtube.com. |
