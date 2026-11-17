@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Background Play + Ad Block
 // @namespace    https://github.com/danman2k/youtube-
-// @version      1.4.0
+// @version      1.5.0
 // @description  Keeps YouTube playing with the screen off / Safari in the background, and blocks or skips ads. Built for Safari on iPhone via the "Userscripts" app.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -102,17 +102,21 @@
   }
 
   const ms = navigator.mediaSession;
+  let reclaimButtons = () => {};
   if (ms && typeof ms.setActionHandler === 'function') {
     const origSet = ms.setActionHandler.bind(ms);
     const pageHandlers = {};
     const wrap = (action) => (details) => {
       markIntent();
       if (hold && (action === 'play' || action === 'pause')) return resumeFromHold();
+      if (action === 'play') {
+        // Let YouTube try first, then make sure it really started.
+        try { if (pageHandlers.play) pageHandlers.play(details); } catch (_) {}
+        return robustPlay(getVideo(), 600);
+      }
       if (pageHandlers[action]) return pageHandlers[action](details);
       const v = getVideo();
-      if (!v) return;
-      if (action === 'play') v.play().catch(() => {});
-      if (action === 'pause') v.pause();
+      if (v && action === 'pause') v.pause();
     };
     ms.setActionHandler = function (action, handler) {
       if (action === 'play' || action === 'pause' || action === 'stop') {
@@ -122,6 +126,7 @@
       return origSet(action, handler);
     };
     for (const a of ['play', 'pause']) { try { origSet(a, wrap(a)); } catch (_) {} }
+    reclaimButtons = () => { for (const a of ['play', 'pause']) { try { origSet(a, wrap(a)); } catch (_) {} } };
   }
 
   // KEEP THE PLAY BUTTON: once nothing is playing, iOS gives the
@@ -133,15 +138,17 @@
   let lastVideoActiveAt = 0;   // last time a video was playing or being resumed
 
   function silentWavUrl() {
-    const rate = 8000, n = rate; // 1 second, 8-bit mono, silent
-    const buf = new Uint8Array(44 + n);
+    // 1 second, 16-bit mono. Not pure digital silence: a tiny +/-1 step
+    // (about -90 dB, far below hearing) so iOS doesn't treat it as idle.
+    const rate = 8000, n = rate, bytes = n * 2;
+    const buf = new Uint8Array(44 + bytes);
     const dv = new DataView(buf.buffer);
     const str = (o, t) => { for (let i = 0; i < t.length; i++) buf[o + i] = t.charCodeAt(i); };
-    str(0, 'RIFF'); dv.setUint32(4, 36 + n, true); str(8, 'WAVE');
+    str(0, 'RIFF'); dv.setUint32(4, 36 + bytes, true); str(8, 'WAVE');
     str(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
-    dv.setUint32(24, rate, true); dv.setUint32(28, rate, true); dv.setUint16(32, 1, true); dv.setUint16(34, 8, true);
-    str(36, 'data'); dv.setUint32(40, n, true);
-    buf.fill(128, 44);
+    dv.setUint32(24, rate, true); dv.setUint32(28, rate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+    str(36, 'data'); dv.setUint32(40, bytes, true);
+    for (let i = 0; i < n; i++) dv.setInt16(44 + i * 2, (i % 4 === 0) ? 1 : (i % 4 === 2) ? -1 : 0, true);
     return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
   }
 
@@ -167,7 +174,7 @@
       try { if (hold.meta) ms.metadata = hold.meta; } catch (_) {}
       try { ms.playbackState = 'paused'; } catch (_) {}
       LOG('holding play button');
-    }).catch(() => { hold = null; });
+    }).catch(() => { if (hold) { clearTimeout(hold.timer); hold = null; } });
   }
 
   function stopSilentAudio() {
@@ -195,17 +202,68 @@
   // Stop the keep-alive once nothing has played for a while (and we aren't
   // holding the play button), so it never loops forever.
   setInterval(() => {
-    if (hold || !holdAudio || holdAudio.paused) return;
+    if (hold) { refreshHold(); return; }
+    if (!holdAudio || holdAudio.paused) return;
     const v = getVideo();
     if (v && !v.paused) { lastVideoActiveAt = Date.now(); return; }
     if (Date.now() - lastVideoActiveAt > 20000) stopSilentAudio();
   }, 2000);
 
+  // While holding: put back the Now Playing info and our button handlers in
+  // case YouTube or iOS cleared them, and restart the sound if it stalled.
+  function refreshHold() {
+    try {
+      if (ms) {
+        if (hold.meta && ms.metadata !== hold.meta) ms.metadata = hold.meta;
+        if (ms.playbackState !== 'paused') ms.playbackState = 'paused';
+      }
+      reclaimButtons();
+      if (holdAudio && holdAudio.paused && !holdAudio.ended) holdAudio.play().catch(() => {});
+    } catch (_) {}
+  }
+
+  // Start the video and keep at it for a few seconds: after a long pause
+  // YouTube may need to re-buffer, or iOS may refuse the first try. Uses
+  // the player's own playVideo() too. If it never starts, keep holding the
+  // play button so the next press can try again.
+  let playJob = 0;
+  function robustPlay(v, firstDelay) {
+    const job = ++playJob;
+    const player = () => { try { return document.getElementById('movie_player'); } catch (_) { return null; } };
+    const attempt = (useApi) => {
+      const vid = (v && v.isConnected) ? v : getVideo();
+      if (!vid) return;
+      vid.play().catch(() => {
+        const p = player();
+        try { if (p && typeof p.playVideo === 'function') p.playVideo(); } catch (_) {}
+      });
+      if (useApi) { const p = player(); try { if (p && typeof p.playVideo === 'function') p.playVideo(); } catch (_) {} }
+    };
+    if (!firstDelay) attempt(false);
+    const delays = [firstDelay || 400, 600, 800, 1000, 1500, 2000];
+    let i = 0;
+    const check = () => {
+      if (job !== playJob) return;
+      const vid = (v && v.isConnected) ? v : getVideo();
+      if (!vid || !vid.paused || vid.ended) { if (vid && !vid.paused) lastVideoActiveAt = Date.now(); return; }
+      if (i >= delays.length) {
+        LOG('play did not start, keeping play button');
+        startHold(vid);
+        return;
+      }
+      lastVideoActiveAt = Date.now();
+      attempt(i > 0);
+      setTimeout(check, delays[i++]);
+    };
+    setTimeout(check, delays[i++]);
+  }
+
   function resumeFromHold() {
     const v = (hold && hold.video && hold.video.isConnected) ? hold.video : getVideo();
-    if (v) v.play().catch(() => {});
-    endHold(true);
+    endHold(true);           // keep the sound going until the video plays
+    lastVideoActiveAt = Date.now();
     try { if (ms) ms.playbackState = 'playing'; } catch (_) {}
+    robustPlay(v, 0);
   }
 
   // If the video gets paused while Safari is in the background (Home
@@ -279,6 +337,7 @@
       if (now - wasPlayingAt > 4000) return;          // wasn't really playing
       if (userPaused()) {                             // you paused it
         pendingPause = null;
+        playJob++;                                    // cancel any resume in progress
         if (!isAdShowing()) startHold(v);
         return;
       }
